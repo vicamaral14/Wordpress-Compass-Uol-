@@ -60,7 +60,7 @@ Crie os SGs abaixo no VPC `wp-vpc`.
 
 **sg-bastion** (para o host bastion)
 - Inbound:
-  - SSH (TCP 22) — Source: **seu IP** (ex.: `203.0.113.1/32`) — restrinja ao máximo
+  - SSH (TCP 22) — Source: **seu IP** (ex.: `203.0.113.1/32`)
 - Outbound: All traffic — `0.0.0.0/0`
 
 **sg-alb** (para o ALB)
@@ -116,17 +116,12 @@ ssh -i ec2-wordpress.pem ubuntu@<BASTION_PUBLIC_IP>
 - DB instance identifier: `wp-db`
 - Credentials: crie usuário e senha (anote com segurança)
 - DB instance class: `db.t3.medium` (ajuste conforme necessidade)
-- Multi-AZ: **Opcional** (recomendado para produção)
-- Storage: gp3 por exemplo
 - Connectivity:
   - VPC: `wp-vpc`
   - DB subnet group: crie um DB subnet group (RDS → Subnet groups) com as sub-redes `Private-1a` e `Private-1b` antes de criar o DB
   - Public accessibility: **No**
   - VPC security groups: `sg-rds`
 - Additional configuration: nome inicial do banco (ex.: `wordpress`)
-
-> Observação: ative backups automáticos conforme política da sua empresa. Verifique se a **DB subnet group** usa apenas as sub-redes privadas.
-
 ---
 
 ## 9) EFS (regional) e mount targets
