@@ -221,32 +221,6 @@ systemctl enable --now nginx
 
 ---
 
-## 14) Testes e validação
-- **ALB:** pegue o DNS do ALB (`wp-alb-xxxx.elb.amazonaws.com`) e abra no navegador. Deve responder com página criada pelo User Data (ex.: nginx) ou WordPress se o script instalou.
-- **Target Group:** verifique se instâncias aparecem como **healthy** (Targets → Health checks). Se unhealthy, verifique o security group (sg-ec2) e se a aplicação está ouvindo na porta 80.
-- **RDS:** a partir de uma instância privada, teste conexão `mysql -h <RDS_ENDPOINT> -u <user> -p`.
-- **EFS:** na instância, verifique `df -h` e `ls /var/www/html`.
-
----
-
-## 15) Limpeza (ordem recomendada)
-1. Terminate ASG (delete group) — certifique que instâncias terminem
-2. Delete ALB
-3. Delete Target Group
-4. Delete Launch Template
-5. Delete EFS (remova mount targets primeiro, ou EFS removerá automaticamente)
-6. Delete RDS (verifique snapshots/backups antes de deletar)
-7. Terminate bastion instance
-8. Delete Security Groups
-9. Delete NAT Gateway
-10. Release Elastic IP
-11. Delete Route Tables (rt-public, rt-private)
-12. Detach & delete Internet Gateway
-13. Delete Subnets
-14. Delete VPC
-
----
-
 ## Notas importantes e dicas
 - **Tempo:** NAT Gateway, EFS mount targets e RDS podem levar alguns minutos para ficarem prontos. Planeje esperar alguns minutos entre passos.
 - **Custos:** NAT Gateway, EFS, ALB e RDS custam em produção — desligue/limpe recursos quando testar para evitar cobranças.
