@@ -12,3 +12,9 @@ Para detalhes completos, veja os arquivos:
 - [User Data Script](04_user_data.md)
 - [Limpeza recomendada](limpeza.md)
 
+## Notas importantes e dicas
+- **Tempo:** NAT Gateway, EFS mount targets e RDS podem levar alguns minutos para ficarem prontos. Planeje esperar alguns minutos entre passos.
+- **Custos:** NAT Gateway, EFS, ALB e RDS custam em produção — desligue/limpe recursos quando testar para evitar cobranças.
+- **Segurança:** restrinja o acesso SSH do bastion ao seu IP; permita tráfego ao RDS apenas a partir do SG das instâncias.
+- **Substitua AMIs e IDs:** AMI do Ubuntu e IDs do EFS/DB são regionais — substitua no user-data e comandos.
+
