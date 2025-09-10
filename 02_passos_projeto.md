@@ -160,21 +160,6 @@ sudo mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,ret
 - Security group: sugerido `sg-ec2` (ou deixe vazio e associe no ASG)
 - User data: cole o seu script de inicialização (User Data) — script **bash** que instala nginx/apache, mount do EFS, configura PHP/WordPress, registra tags, etc.
 
-### Exemplo mínimo de **user-data** (substitua `fs-XXXXXXX` pelo ID do seu EFS)
-```bash
-#!/bin/bash
-set -xe
-apt update
-apt install -y nginx amazon-efs-utils
-mkdir -p /var/www/html
-# montar EFS via ID
-FILE_SYSTEM_ID=fs-XXXXXXX
-mount -t efs ${FILE_SYSTEM_ID}:/ /var/www/html || true
-systemctl enable --now nginx
-```
-
-> Substitua esse script pelo seu script completo de provisionamento (WordPress, PHP, WP-CLI, permissões, etc.).
-
 ---
 
 ## 11) Target Group (`wp-target-group`)
@@ -220,10 +205,8 @@ systemctl enable --now nginx
 > O ASG criará instâncias nas sub-redes privadas; o ALB (em sub-redes públicas) encaminhará tráfego para as instâncias.
 
 ---
-
-## Notas importantes e dicas
-- **Tempo:** NAT Gateway, EFS mount targets e RDS podem levar alguns minutos para ficarem prontos. Planeje esperar alguns minutos entre passos.
-- **Custos:** NAT Gateway, EFS, ALB e RDS custam em produção — desligue/limpe recursos quando testar para evitar cobranças.
-- **Segurança:** restrinja o acesso SSH do bastion ao seu IP; permita tráfego ao RDS apenas a partir do SG das instâncias.
-- **Substitua AMIs e IDs:** AMI do Ubuntu e IDs do EFS/DB são regionais — substitua no user-data e comandos.
-- **Backups RDS:** ative backup automático e configure retenção se for produção.
+## 14) Testes e validação
+- **ALB:** pegue o DNS do ALB (`wp-alb-xxxx.elb.amazonaws.com`) e abra no navegador. Deve responder com página criada pelo User Data (ex.: nginx) ou WordPress se o script instalou.
+- **Target Group:** verifique se instâncias aparecem como **healthy** (Targets → Health checks). Se unhealthy, verifique o security group (sg-ec2) e se a aplicação está ouvindo na porta 80.
+- **RDS:** a partir de uma instância privada, teste conexão `mysql -h <RDS_ENDPOINT> -u <user> -p`.
+- **EFS:** na instância, verifique `df -h` e `ls /var/www/html`.
