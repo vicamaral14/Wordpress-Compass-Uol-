@@ -1,89 +1,255 @@
-Passo 1: Preparando o Ambiente Local com Docker
-Antes de subir tudo para a nuvem, é uma ótima prática testar a aplicação localmente. O Docker nos permite fazer isso de forma rápida e isolada.
+## 1) Criar VPC
+**Console path:** VPC → Your VPCs → Create VPC
+- Name tag: `wp-vpc`
+- IPv4 CIDR block: `10.0.0.0/16`
+- Tenancy: Default
+- Após criar: habilite **DNS hostnames** e **DNS resolution** (Actions → Edit DNS hostnames / Edit DNS resolution) — importante para ALB, EFS e comunicação.
 
-Baixe a imagem do WordPress:
+---
 
-Bash
+## 2) Criar sub-redes
+**Console path:** VPC → Subnets → Create subnet
+Crie 4 sub-redes no VPC `wp-vpc`:
+- `Public-1a` (AZ = 1a) — `10.0.1.0/24` — **Auto-assign Public IPv4 address: ENABLED**
+- `Public-1b` (AZ = 1b) — `10.0.2.0/24` — **Auto-assign Public IPv4 address: ENABLED**
+- `Private-1a` (AZ = 1a) — `10.0.101.0/24` — **Auto-assign: DISABLED**
+- `Private-1b` (AZ = 1b) — `10.0.102.0/24` — **Auto-assign: DISABLED**
 
-docker pull wordpress
-Este comando baixa a imagem oficial do WordPress para o seu computador. Pense nisso como baixar um arquivo de instalação pré-configurado.
+---
 
-Inicie os serviços do Docker:
+## 3) Internet Gateway
+**Console path:** VPC → Internet Gateways
+- Create internet gateway (nome: `igw-wp`) → Attach to `wp-vpc`.
 
-Bash
+---
 
-docker-compose up -d
-Este comando usa um arquivo de configuração (chamado docker-compose.yml) para iniciar o WordPress e o banco de dados (MySQL/MariaDB) de uma só vez, em segundo plano (-d).
+## 4) Tabelas de rotas
+**Console path:** VPC → Route Tables
 
-Passo 2: Criando a Estrutura de Rede na AWS (VPC)
-A Virtual Private Cloud (VPC) é a sua "rede privada" na nuvem. Nela, vamos isolar nossos recursos e controlar o tráfego.
+### Tabela pública
+- Create route table → Name: `rt-public` → VPC: `wp-vpc`.
+- Edit routes: adicionar `0.0.0.0/0` → Target: `igw-wp`.
+- Associate → associe `rt-public` às sub-redes `Public-1a` e `Public-1b`.
 
-Crie sua VPC: Vá até o serviço de VPC na AWS e crie uma nova. Pense nela como a base de toda a sua infraestrutura.
+### Tabela privada
+- Create route table → Name: `rt-private` → VPC: `wp-vpc`.
+- **Não** adicione ainda a rota 0.0.0.0/0 — aguarde a criação do NAT Gateway.
+- Depois de criar o NAT, adicione rota `0.0.0.0/0` → Target: **NAT Gateway** (selecione o NAT criado).
+- Associate → associe `rt-private` às sub-redes `Private-1a` e `Private-1b`.
 
-Crie 2 Zonas de Disponibilidade (AZs): As AZs são locais físicos separados. Usar duas garante que, se uma falhar, a outra continuará funcionando, aumentando a disponibilidade.
+> Observação: se você quiser sub-redes privadas com acesso à Internet somente via NAT, mantenha `Public-1x` com a associação ao `rt-public` e `Private-1x` ao `rt-private`.
 
-Crie 4 Sub-redes: Sub-redes são divisões da sua VPC.
+---
 
-2 sub-redes públicas: Recursos que precisam de acesso direto à internet (como o Load Balancer) serão colocados aqui.
+## 5) Elastic IP + NAT Gateway
+**Console path:** EC2 → Network & Security → Elastic IPs
+- Allocate Elastic IP — reserve para o NAT.
 
-2 sub-redes privadas: Recursos que não precisam de acesso direto à internet (como as instâncias do WordPress e o banco de dados) serão colocados aqui, por segurança.
+**Console path:** VPC → NAT Gateways (ou EC2 → NAT Gateways)
+- Create NAT Gateway
+  - Subnet: `Public-1a`
+  - Elastic IP: selecione o EIP alocado
+- Aguarde o estado `Available`.
+- Atualize a rota `rt-private` adicionando `0.0.0.0/0` → NAT Gateway.
 
-Configure o Gateway de Internet (Internet Gateway - IGW): Conecte-o à sua VPC. Ele permite que o tráfego de internet entre e saia das suas sub-redes públicas.
+---
 
-Configure o Gateway NAT (NAT Gateway): Coloque-o em uma sub-rede pública. O NAT Gateway permite que os recursos das sub-redes privadas se conectem à internet (para fazer atualizações, por exemplo), mas impede que o tráfego de internet chegue até eles diretamente.
+## 6) Security Groups (SG)
+**Console path:** EC2 → Network & Security → Security Groups
+Crie os SGs abaixo no VPC `wp-vpc`.
 
-Passo 3: Criando os Serviços Principais
-Agora que a rede está pronta, vamos criar os serviços essenciais para o WordPress.
+**sg-bastion** (para o host bastion)
+- Inbound:
+  - SSH (TCP 22) — Source: **seu IP** (ex.: `203.0.113.1/32`) — restrinja ao máximo
+- Outbound: All traffic — `0.0.0.0/0`
 
-Crie o Banco de Dados (RDS):
+**sg-alb** (para o ALB)
+- Inbound:
+  - HTTP (TCP 80) — Source: `0.0.0.0/0` (se público)
+  - (opcional) HTTPS (TCP 443) — Source: `0.0.0.0/0`
+- Outbound: All traffic
 
-Vá para o serviço RDS e crie uma nova instância de banco de dados (MySQL ou MariaDB).
+**sg-ec2** (para instâncias que rodarão WordPress/app)
+- Inbound:
+  - HTTP (TCP 80) — Source: **sg-alb** (referência de security group)
+  - SSH (TCP 22) — Source: **sg-bastion** (permitir ssh apenas do bastion)
+- Outbound: All
 
-Crie um Security Group específico para o RDS. O Security Group funciona como um firewall e deve ser configurado para permitir conexões apenas a partir das instâncias EC2, ou seja, as máquinas onde o WordPress irá rodar.
+**sg-rds** (para banco de dados)
+- Inbound:
+  - MySQL/Aurora (TCP 3306) — Source: **sg-ec2**
+- Outbound: All
 
-Crie o Sistema de Arquivos (EFS):
+**sg-efs** (para EFS mount targets)
+- Inbound:
+  - NFS (TCP 2049) — Source: **sg-ec2**
+- Outbound: All
 
-O Elastic File System (EFS) permite que várias instâncias EC2 compartilhem a mesma pasta de arquivos. Isso é crucial para o WordPress, já que as imagens e plugins precisam estar acessíveis para todas as instâncias que rodam o site.
+> Dica: ao adicionar regras que usam outro SG como origem, selecione o ID do SG (ex.: `sg-0abc1234`) no console.
 
-Crie o EFS e ajuste as permissões de seu Security Group para permitir acesso das instâncias EC2.
+---
 
-Passo 4: Criando uma Imagem Personalizada (AMI) e um Template de Lançamento
-Em vez de configurar cada máquina EC2 manualmente, vamos criar um "modelo" com tudo pronto.
+## 7) Bastion Host (EC2)
+**Console path:** EC2 → Instances → Launch Instances
+- AMI: Ubuntu 24.04 LTS (escolha AMI correta por região)
+- Instance type: `t3.micro` ou similar (teste)
+- Network: `wp-vpc` → Subnet: `Public-1a`
+- Auto-assign Public IP: **Enable**
+- Key pair: `ec2-wordpress`
+- Security group: `sg-bastion`
+- Name: `bastion-wp`
 
-Crie uma AMI base (opcional, mas recomendado):
+**Conectar via SSH (do seu PC):**
+```bash
+chmod 400 ec2-wordpress.pem
+ssh -i ec2-wordpress.pem ubuntu@<BASTION_PUBLIC_IP>
+```
 
-Inicie uma instância EC2 com um sistema operacional (como o Linux 2 da Amazon).
+> Use o bastion para acessar instâncias nas sub-redes privadas (via `ssh -A` ou `ProxyJump`).
 
-Instale o Apache, PHP e o WordPress.
+---
 
-Configure a instância para montar o EFS e conectar-se ao RDS.
+## 8) RDS — MySQL (instância na sub-rede privada)
+**Console path:** RDS → Databases → Create database
+- Engine: **MySQL**
+- Creation method: Standard create
+- DB instance identifier: `wp-db`
+- Credentials: crie usuário e senha (anote com segurança)
+- DB instance class: `db.t3.medium` (ajuste conforme necessidade)
+- Multi-AZ: **Opcional** (recomendado para produção)
+- Storage: gp3 por exemplo
+- Connectivity:
+  - VPC: `wp-vpc`
+  - DB subnet group: crie um DB subnet group (RDS → Subnet groups) com as sub-redes `Private-1a` e `Private-1b` antes de criar o DB
+  - Public accessibility: **No**
+  - VPC security groups: `sg-rds`
+- Additional configuration: nome inicial do banco (ex.: `wordpress`)
 
-Após a configuração, crie uma AMI (Amazon Machine Image) a partir dessa instância. Essa AMI será a sua imagem personalizada, um clone perfeito da sua máquina configurada.
+> Observação: ative backups automáticos conforme política da sua empresa. Verifique se a **DB subnet group** usa apenas as sub-redes privadas.
 
-Crie um Template de Lançamento (Launch Template):
+---
 
-Este template vai usar a sua AMI personalizada como base.
+## 9) EFS (regional) e mount targets
+**Console path:** EFS → File systems → Create file system
+- Escolha VPC `wp-vpc`
+- Selecione as sub-redes (crie mount targets) — marque `Private-1a` e `Private-1b`
+- Security group: `sg-efs` (o console pedirá qual SG aplicar aos mount targets)
+- Create
 
-Adicione um User Data ao template. O User Data é um script que roda quando a instância é iniciada. Use-o para montar o EFS e conectar a instância ao banco de dados RDS de forma automatizada.
+> O EFS cria interfaces de rede (ENIs) nas sub-redes selecionadas — confirme que há ENIs nas sub-redes privadas.
 
-Salve o template com essas configurações.
+### Montagem no EC2 (exemplo rápido)
+No `wp-template` (user-data) você montará o EFS. Exemplo de comando para testar manualmente (substitua `fs-XXXXXXX`):
+```bash
+sudo apt update
+sudo apt install -y amazon-efs-utils nfs-common
+sudo mkdir -p /var/www/html
+sudo mount -t efs fs-XXXXXXX:/ /var/www/html
+# ou via DNS
+sudo mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 fs-XXXXXXX.efs.<region>.amazonaws.com:/ /var/www/html
+```
 
-Passo 5: Configurando a Escalabilidade Automática (Auto Scaling Group)
-O Auto Scaling Group (ASG) é o serviço que garante que você sempre tenha o número certo de instâncias para suportar o tráfego do seu site.
+---
 
-Crie o Auto Scaling Group:
+## 10) Launch Template (`wp-template`)
+**Console path:** EC2 → Launch Templates → Create launch template
+- Name: `wp-template`
+- AMI: Ubuntu 24.04 LTS (escolha a AMI correta para a sua região)
+- Instance type: (ex.: t3.micro / t3.small conforme teste)
+- Key pair: `ec2-wordpress`
+- Security group: sugerido `sg-ec2` (ou deixe vazio e associe no ASG)
+- User data: cole o seu script de inicialização (User Data) — script **bash** que instala nginx/apache, mount do EFS, configura PHP/WordPress, registra tags, etc.
 
-Associe o ASG às suas sub-redes privadas e ao seu Application Load Balancer (ALB), que criaremos a seguir.
+### Exemplo mínimo de **user-data** (substitua `fs-XXXXXXX` pelo ID do seu EFS)
+```bash
+#!/bin/bash
+set -xe
+apt update
+apt install -y nginx amazon-efs-utils
+mkdir -p /var/www/html
+# montar EFS via ID
+FILE_SYSTEM_ID=fs-XXXXXXX
+mount -t efs ${FILE_SYSTEM_ID}:/ /var/www/html || true
+systemctl enable --now nginx
+```
 
-Configure a política de escalonamento: por exemplo, aumente o número de instâncias se a utilização da CPU ultrapassar 70% e diminua quando a utilização cair.
+> Substitua esse script pelo seu script completo de provisionamento (WordPress, PHP, WP-CLI, permissões, etc.).
 
-Passo 6: Distribuindo o Tráfego com o Load Balancer
-O Application Load Balancer (ALB) distribui o tráfego de internet entre as suas instâncias EC2.
+---
 
-Crie um Application Load Balancer:
+## 11) Target Group (`wp-target-group`)
+**Console path:** EC2 → Load Balancing → Target Groups → Create target group
+- Name: `wp-target-group`
+- Target type: **Instance**
+- Protocol: HTTP, Port: `80`
+- VPC: `wp-vpc`
+- Health checks:
+  - Protocol: HTTP
+  - Path: `/`
+  - Success codes: `200-399`
+- Create
 
-Associe-o às suas sub-redes públicas.
+---
 
-Configure os Listeners: eles escutam o tráfego nas portas HTTP (80) e HTTPS (443).
+## 12) Application Load Balancer (ALB)
+**Console path:** EC2 → Load Balancing → Load Balancers → Create Load Balancer → Application Load Balancer
+- Name: `wp-alb`
+- Scheme: Internet-facing
+- IP address type: IPv4
+- Listeners: HTTP :80 (pode adicionar HTTPS :443 depois)
+- Availability Zones: selecione as sub-redes públicas `Public-1a` e `Public-1b`
+- Security groups: `sg-alb`
+- Configure routing: aponte o listener HTTP:80 para o target group `wp-target-group` (ou deixe para depois e configure listener)
+- Create
 
-Configure o ALB para encaminhar todo o tráfego para o seu Auto Scaling Group.
+> Anote o DNS name do ALB — será o front-end público do site.
+
+---
+
+## 13) Auto Scaling Group (ASG) — `wp-asg`
+**Console path:** EC2 → Auto Scaling → Create Auto Scaling group
+- Name: `wp-asg`
+- Launch template: selecione `wp-template` (escolha versão que contém user-data)
+- VPC: `wp-vpc`
+- Subnets: escolha `Private-1a` e `Private-1b`
+- Load Balancer: selecione o ALB e associe `wp-target-group`
+- Group size: Desired = `1`, Min = `1`, Max = `2` (ajuste conforme necessidade)
+- Configure scaling policies: opcional — pode criar política baseada em CPU ou em ALB request count
+- Create
+
+> O ASG criará instâncias nas sub-redes privadas; o ALB (em sub-redes públicas) encaminhará tráfego para as instâncias.
+
+---
+
+## 14) Testes e validação
+- **ALB:** pegue o DNS do ALB (`wp-alb-xxxx.elb.amazonaws.com`) e abra no navegador. Deve responder com página criada pelo User Data (ex.: nginx) ou WordPress se o script instalou.
+- **Target Group:** verifique se instâncias aparecem como **healthy** (Targets → Health checks). Se unhealthy, verifique o security group (sg-ec2) e se a aplicação está ouvindo na porta 80.
+- **RDS:** a partir de uma instância privada, teste conexão `mysql -h <RDS_ENDPOINT> -u <user> -p`.
+- **EFS:** na instância, verifique `df -h` e `ls /var/www/html`.
+
+---
+
+## 15) Limpeza (ordem recomendada)
+1. Terminate ASG (delete group) — certifique que instâncias terminem
+2. Delete ALB
+3. Delete Target Group
+4. Delete Launch Template
+5. Delete EFS (remova mount targets primeiro, ou EFS removerá automaticamente)
+6. Delete RDS (verifique snapshots/backups antes de deletar)
+7. Terminate bastion instance
+8. Delete Security Groups
+9. Delete NAT Gateway
+10. Release Elastic IP
+11. Delete Route Tables (rt-public, rt-private)
+12. Detach & delete Internet Gateway
+13. Delete Subnets
+14. Delete VPC
+
+---
+
+## Notas importantes e dicas
+- **Tempo:** NAT Gateway, EFS mount targets e RDS podem levar alguns minutos para ficarem prontos. Planeje esperar alguns minutos entre passos.
+- **Custos:** NAT Gateway, EFS, ALB e RDS custam em produção — desligue/limpe recursos quando testar para evitar cobranças.
+- **Segurança:** restrinja o acesso SSH do bastion ao seu IP; permita tráfego ao RDS apenas a partir do SG das instâncias.
+- **Substitua AMIs e IDs:** AMI do Ubuntu e IDs do EFS/DB são regionais — substitua no user-data e comandos.
+- **Backups RDS:** ative backup automático e configure retenção se for produção.
