@@ -13,7 +13,7 @@ Para detalhes completos, veja os arquivos:
 - [Limpeza recomendada](limpeza.md)
 
 ## Notas importantes e dicas
-- **Testes:** Antes de avançar para cada etapa faça testes com o que vc criou.
+- **Testes:** Antes de avançar para cada etapa, faça testes com o que vc criou.
 - **Tempo:** NAT Gateway, EFS mount targets e RDS podem levar alguns minutos para ficarem prontos. Planeje esperar alguns minutos entre passos.
 - **Custos:** NAT Gateway, EFS, ALB e RDS custam em produção — desligue/limpe recursos quando testar para evitar cobranças.
 - **Segurança:** restrinja o acesso SSH do bastion ao seu IP; permita tráfego ao RDS apenas a partir do SG das instâncias.
